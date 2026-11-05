@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 
 app = FastAPI(
-    title="Python CI/CD Demo API",
+    title="Python CI/CD Demo APIs",
     description="A small FastAPI application deployed through Jenkins.",
     version="1.0.0",
 )
