@@ -1,9 +1,6 @@
 
 pipeline {
-    agent {
-        // Agent must provide Gi, Python 3, pip, Docker CLI and Docker daemon access.
-        label 'python-agent'
-    }
+    agent any
 
     triggers {
         githubPush()
