@@ -38,7 +38,7 @@ pipeline {
                     docker --version
                     docker info
 
-                    echo "Checking Docker network..."
+                    echo "Checking Docker network......"
                     docker network inspect "${DOCKER_NETWORK}"
                 '''
             }
