@@ -9,7 +9,7 @@ def test_root_endpoint():
     response = client.get("/")
     assert response.status_code == 200
     assert response.json() == {
-        "message": "Hello from the Python API Application!",
+        "message": "Hello from the Python API",
         "status": "running",
     }
 
