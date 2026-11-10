@@ -1,0 +1,220 @@
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(
+            numToKeepStr: '10'
+        ))
+    }
+
+    environment {
+        DOCKERHUB_REPO = 'YOUR_DOCKERHUB_USERNAME/python-api'
+        K8S_NAMESPACE = 'python-app'
+        DEPLOYMENT_NAME = 'python-api'
+        CONTAINER_NAME = 'python-api'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                    python3 -m pip install -r requirements.txt
+                    python3 -m pip install pytest
+                '''
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh '''
+                    python3 -m pytest -v
+                '''
+            }
+        }
+
+        stage('Build and Push Docker Image') {
+
+            when {
+                branch 'main'
+            }
+
+            steps {
+                script {
+                    def shortCommit = env.GIT_COMMIT.take(7)
+
+                    env.IMAGE = "${env.DOCKERHUB_REPO}:${env.BUILD_NUMBER}-${shortCommit}"
+                }
+
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+
+                    sh '''
+                        set -eu
+                        set +x
+
+                        trap 'docker logout >/dev/null 2>&1 || true' EXIT
+
+                        echo "$DOCKER_PASSWORD" |
+                            docker login \
+                            -u "$DOCKER_USER" \
+                            --password-stdin
+
+                        docker build \
+                            -t "$IMAGE" \
+                            .
+
+                        docker push "$IMAGE"
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+
+            when {
+                branch 'main'
+            }
+
+            steps {
+
+                withCredentials([
+
+                    file(
+                        credentialsId: 'kubeconfig-file',
+                        variable: 'KUBECONFIG'
+                    ),
+
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+
+                ]) {
+
+                    sh '''
+                        set -eu
+                        set +x
+                        set -o pipefail
+
+                        echo "Checking Kubernetes access..."
+
+                        kubectl get deployments \
+                            -n "$K8S_NAMESPACE"
+
+                        echo "Updating Docker registry secret..."
+
+                        kubectl create secret docker-registry dockerhub-registry \
+                            --docker-server=https://index.docker.io/v1/ \
+                            --docker-username="$DOCKER_USER" \
+                            --docker-password="$DOCKER_PASSWORD" \
+                            --namespace="$K8S_NAMESPACE" \
+                            --dry-run=client \
+                            -o yaml |
+                            kubectl apply -f -
+
+                        echo "Applying Kubernetes Service..."
+
+                        kubectl apply \
+                            -f k8s/deployment/service.yaml
+
+                        echo "Checking previous deployment..."
+
+                        OLD_IMAGE=$(
+                            kubectl get deployment "$DEPLOYMENT_NAME" \
+                                -n "$K8S_NAMESPACE" \
+                                -o jsonpath='{.spec.template.spec.containers[?(@.name=="python-api")].image}' \
+                                2>/dev/null || true
+                        )
+
+                        echo "Previous image: ${OLD_IMAGE:-none}"
+
+                        echo "Applying new deployment..."
+
+                        sed "s|__IMAGE__|$IMAGE|g" \
+                            k8s/deployment/deployment.yaml |
+                            kubectl apply -f -
+
+                        echo "Waiting for deployment rollout..."
+
+                        if kubectl rollout status \
+                            deployment/"$DEPLOYMENT_NAME" \
+                            -n "$K8S_NAMESPACE" \
+                            --timeout=180s
+                        then
+                            echo "Deployment successful."
+
+                        else
+                            echo "Deployment failed."
+
+                            if [ -n "$OLD_IMAGE" ]; then
+
+                                echo "Rolling back to previous revision..."
+
+                                kubectl rollout undo \
+                                    deployment/"$DEPLOYMENT_NAME" \
+                                    -n "$K8S_NAMESPACE"
+
+                                echo "Waiting for rollback..."
+
+                                kubectl rollout status \
+                                    deployment/"$DEPLOYMENT_NAME" \
+                                    -n "$K8S_NAMESPACE" \
+                                    --timeout=180s
+
+                                echo "Rollback completed."
+
+                            else
+                                echo "No previous deployment exists."
+                                echo "Initial deployment needs manual correction."
+                            fi
+
+                            kubectl get pods \
+                                -n "$K8S_NAMESPACE"
+
+                            exit 1
+                        fi
+
+                        echo "Final deployment status:"
+
+                        kubectl get deployments \
+                            -n "$K8S_NAMESPACE"
+
+                        kubectl get pods \
+                            -n "$K8S_NAMESPACE" \
+                            -o wide
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'CI/CD pipeline completed successfully.'
+        }
+
+        failure {
+            echo 'CI/CD pipeline failed. Check deployment and rollback logs.'
+        }
+
+        always {
+            echo 'Pipeline execution completed.'
+        }
+    }
+}
