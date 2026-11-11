@@ -11,7 +11,7 @@ pipeline {
     }
 
     environment {
-        DOCKERHUB_REPO = 'YOUR_DOCKERHUB_USERNAME/python-api'
+        DOCKERHUB_REPO = 'haritharavichandran/python-api'
         K8S_NAMESPACE = 'python-app'
         DEPLOYMENT_NAME = 'python-api'
         CONTAINER_NAME = 'python-api'
@@ -22,14 +22,50 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
+
+                sh '''
+                    echo "Branch: ${BRANCH_NAME}"
+                    echo "Commit:"
+                    git rev-parse --short HEAD
+                '''
+            }
+        }
+
+        stage('Preflight') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "Checking required tools..."
+
+                    git --version
+                    python3 --version
+                    docker --version
+                    kubectl version --client
+
+                    echo "Preflight checks completed."
+                '''
             }
         }
 
         stage('Install Dependencies') {
             steps {
                 sh '''
-                    python3 -m pip install -r requirements.txt
-                    python3 -m pip install pytest
+                    set -eu
+
+                    echo "Creating Python virtual environment..."
+
+                    python3 -m venv .venv
+
+                    echo "Installing dependencies..."
+
+                    .venv/bin/python -m pip install --upgrade pip
+
+                    .venv/bin/python -m pip install -r requirements.txt
+
+                    .venv/bin/python -m pip install pytest
+
+                    echo "Dependencies installed successfully."
                 '''
             }
         }
@@ -37,7 +73,13 @@ pipeline {
         stage('Run Tests') {
             steps {
                 sh '''
-                    python3 -m pytest -v
+                    set -eu
+
+                    echo "Running unit tests..."
+
+                    .venv/bin/python -m pytest -v
+
+                    echo "All tests passed."
                 '''
             }
         }
@@ -50,7 +92,10 @@ pipeline {
 
             steps {
                 script {
-                    def shortCommit = env.GIT_COMMIT.take(7)
+                    def shortCommit = sh(
+                        script: 'git rev-parse --short=7 HEAD',
+                        returnStdout: true
+                    ).trim()
 
                     env.IMAGE = "${env.DOCKERHUB_REPO}:${env.BUILD_NUMBER}-${shortCommit}"
                 }
@@ -63,22 +108,31 @@ pipeline {
                     )
                 ]) {
 
-                    sh '''
-                        set -eu
+                    sh '''#!/bin/bash
+                        set -euo pipefail
                         set +x
 
                         trap 'docker logout >/dev/null 2>&1 || true' EXIT
+
+                        echo "Logging into Docker Hub..."
 
                         echo "$DOCKER_PASSWORD" |
                             docker login \
                             -u "$DOCKER_USER" \
                             --password-stdin
 
+                        echo "Building Docker image: $IMAGE"
+
                         docker build \
+                            --pull \
                             -t "$IMAGE" \
                             .
 
+                        echo "Pushing Docker image..."
+
                         docker push "$IMAGE"
+
+                        echo "Docker image pushed successfully."
                     '''
                 }
             }
@@ -107,12 +161,13 @@ pipeline {
 
                 ]) {
 
-                    sh '''
-                        set -eu
+                    sh '''#!/bin/bash
+                        set -euo pipefail
                         set +x
-                        set -o pipefail
 
                         echo "Checking Kubernetes access..."
+
+                        kubectl get namespace "$K8S_NAMESPACE"
 
                         kubectl get deployments \
                             -n "$K8S_NAMESPACE"
@@ -184,8 +239,14 @@ pipeline {
                                 echo "Initial deployment needs manual correction."
                             fi
 
+                            echo "Collecting deployment diagnostics..."
+
                             kubectl get pods \
-                                -n "$K8S_NAMESPACE"
+                                -n "$K8S_NAMESPACE" \
+                                -o wide || true
+
+                            kubectl describe deployment "$DEPLOYMENT_NAME" \
+                                -n "$K8S_NAMESPACE" || true
 
                             exit 1
                         fi
@@ -198,6 +259,8 @@ pipeline {
                         kubectl get pods \
                             -n "$K8S_NAMESPACE" \
                             -o wide
+
+                        echo "Kubernetes deployment completed successfully."
                     '''
                 }
             }
@@ -205,16 +268,43 @@ pipeline {
     }
 
     post {
+
         success {
-            echo 'CI/CD pipeline completed successfully.'
+            echo "CI/CD pipeline completed successfully for ${BRANCH_NAME}."
+
+            script {
+                if (env.BRANCH_NAME == 'main') {
+                    echo "Docker image: ${env.IMAGE}"
+                    echo "Kubernetes namespace: ${env.K8S_NAMESPACE}"
+                } else {
+                    echo "Tests completed. Deployment skipped for non-main branch."
+                }
+            }
         }
 
         failure {
-            echo 'CI/CD pipeline failed. Check deployment and rollback logs.'
+            echo "CI/CD pipeline failed for ${BRANCH_NAME}."
+
+            script {
+                if (env.BRANCH_NAME == 'main') {
+                    echo "Checking application logs..."
+
+                    sh '''
+                        kubectl get pods \
+                            -n "$K8S_NAMESPACE" \
+                            -o wide || true
+
+                        kubectl logs \
+                            deployment/"$DEPLOYMENT_NAME" \
+                            -n "$K8S_NAMESPACE" \
+                            --tail=100 || true
+                    '''
+                }
+            }
         }
 
         always {
-            echo 'Pipeline execution completed.'
+            echo "Pipeline execution completed."
         }
     }
 }
