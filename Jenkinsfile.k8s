@@ -165,8 +165,8 @@ pipeline {
 
                         echo "Checking Kubernetes access..."
 
-                        kubectl get namespace "$K8S_NAMESPACE"
-
+                     
+    
                         kubectl get deployments \
                             -n "$K8S_NAMESPACE"
 
