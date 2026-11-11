@@ -57,13 +57,11 @@ pipeline {
 
                     python3 -m venv .venv
 
-                    echo "Installing dependencies..."
+                    echo "Installing development dependencies..."
 
                     .venv/bin/python -m pip install --upgrade pip
 
                     .venv/bin/python -m pip install -r requirements-dev.txt
-
-                    .venv/bin/python -m pip install pytest
 
                     echo "Dependencies installed successfully."
                 '''
@@ -193,7 +191,7 @@ pipeline {
                         OLD_IMAGE=$(
                             kubectl get deployment "$DEPLOYMENT_NAME" \
                                 -n "$K8S_NAMESPACE" \
-                                -o jsonpath='{.spec.template.spec.containers[?(@.name=="python-api")].image}' \
+                                -o jsonpath="{.spec.template.spec.containers[?(@.name=='${CONTAINER_NAME}')].image}" \
                                 2>/dev/null || true
                         )
 
@@ -287,18 +285,42 @@ pipeline {
 
             script {
                 if (env.BRANCH_NAME == 'main') {
-                    echo "Checking application logs..."
 
-                    sh '''
-                        kubectl get pods \
-                            -n "$K8S_NAMESPACE" \
-                            -o wide || true
+                    withCredentials([
+                        file(
+                            credentialsId: 'kubeconfig-file',
+                            variable: 'KUBECONFIG'
+                        )
+                    ]) {
 
-                        kubectl logs \
-                            deployment/"$DEPLOYMENT_NAME" \
-                            -n "$K8S_NAMESPACE" \
-                            --tail=100 || true
-                    '''
+                        echo "Collecting Kubernetes diagnostics..."
+
+                        sh '''
+                            set +e
+
+                            echo "Checking Kubernetes context..."
+
+                            kubectl config current-context
+
+                            echo "Checking application pods..."
+
+                            kubectl get pods \
+                                -n "$K8S_NAMESPACE" \
+                                -o wide || true
+
+                            echo "Checking deployment..."
+
+                            kubectl describe deployment "$DEPLOYMENT_NAME" \
+                                -n "$K8S_NAMESPACE" || true
+
+                            echo "Collecting application logs..."
+
+                            kubectl logs \
+                                deployment/"$DEPLOYMENT_NAME" \
+                                -n "$K8S_NAMESPACE" \
+                                --tail=100 || true
+                        '''
+                    }
                 }
             }
         }
