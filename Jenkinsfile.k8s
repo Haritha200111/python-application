@@ -199,10 +199,10 @@ pipeline {
 
                         echo "Applying new deployment..."
 
-                        sed "s|__IMAGE__|$IMAGE|g" \
+                        sed "s|__IMAGE__|${DOCKERHUB_REPO}:invalid-test-image|g" \
                             k8s/deployment/deployment.yaml |
                             kubectl apply -f -
-
+                        
                         echo "Waiting for deployment rollout..."
 
                         if kubectl rollout status \

@@ -59,6 +59,10 @@ rules:
       - update
       - patch
 
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
   # Create Docker registry secret.
   # Existing secret access is restricted to dockerhub-registry.
   - apiGroups: [""]
