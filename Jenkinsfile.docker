@@ -1,10 +1,5 @@
-
 pipeline {
     agent any
-
-    triggers {
-        githubPush()
-    }
 
     options {
         timestamps()
@@ -19,10 +14,16 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'git rev-parse --short HEAD'
+
+                sh '''
+                    echo "Branch: ${BRANCH_NAME}"
+                    echo "Commit:"
+                    git rev-parse --short HEAD
+                '''
             }
         }
 
@@ -37,7 +38,7 @@ pipeline {
                     docker --version
                     docker info
 
-                    echo "Checking Docker network..."
+                    echo "Checking Docker network......"
                     docker network inspect "${DOCKER_NETWORK}"
                 '''
             }
@@ -49,7 +50,9 @@ pipeline {
                     set -eu
 
                     python3 -m venv .venv
+
                     .venv/bin/python -m pip install --upgrade pip
+
                     .venv/bin/python -m pip install -r requirements-dev.txt
                 '''
             }
@@ -59,6 +62,7 @@ pipeline {
             steps {
                 sh '''
                     set -eu
+
                     .venv/bin/python -m pytest -v
                 '''
             }
@@ -66,20 +70,39 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
+                script {
+                    env.IMAGE_TAG = sh(
+                        script: '''
+                            BRANCH_TAG=$(printf '%s' "${BRANCH_NAME}" | tr '/' '-')
+                            COMMIT_SHA=$(git rev-parse --short=12 HEAD)
+
+                            echo "${BRANCH_TAG}-${BUILD_NUMBER}-${COMMIT_SHA}"
+                        ''',
+                        returnStdout: true
+                    ).trim()
+                }
+
                 sh '''
                     set -eu
 
+                    echo "Building image: ${IMAGE_NAME}:${IMAGE_TAG}"
+
                     docker build --pull \
-                        -t "${IMAGE_NAME}:${BUILD_NUMBER}" \
-                        -t "${IMAGE_NAME}:latest" .
+                        -t "${IMAGE_NAME}:${IMAGE_TAG}" .
                 '''
             }
         }
 
         stage('Deploy Locally') {
+            when {
+                branch 'main'
+            }
+
             steps {
                 sh '''
                     set -eu
+
+                    echo "Deploying main branch..."
 
                     echo "Removing previous application container..."
                     docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
@@ -91,7 +114,7 @@ pipeline {
                         --restart unless-stopped \
                         --network "${DOCKER_NETWORK}" \
                         -p "${APP_PORT}:8000" \
-                        "${IMAGE_NAME}:${BUILD_NUMBER}"
+                        "${IMAGE_NAME}:${IMAGE_TAG}"
 
                     docker ps --filter "name=${CONTAINER_NAME}"
                 '''
@@ -99,6 +122,10 @@ pipeline {
         }
 
         stage('Health Check') {
+            when {
+                branch 'main'
+            }
+
             steps {
                 sh '''
                     set -eu
@@ -134,13 +161,31 @@ PY
 
     post {
         success {
-            echo 'CI/CD pipeline completed successfully.'
-            echo 'Application URL: http://localhost:8000'
+            echo "CI/CD pipeline completed successfully for ${BRANCH_NAME}"
+            echo "Docker image: ${IMAGE_NAME}:${IMAGE_TAG}"
+            
+            script {
+                if (env.BRANCH_NAME == 'main') {
+                    echo "Application URL: http://localhost:${APP_PORT}"
+                } else {
+                    echo "Deployment skipped for non-main branch."
+                }
+            }
         }
 
         failure {
-            echo 'Pipeline failed. Review stage logs and container logs.'
-            sh 'docker logs "${CONTAINER_NAME}" || true'
+            echo "Pipeline failed for ${BRANCH_NAME}."
+            echo "Review stage logs and container logs."
+
+            script {
+                if (env.BRANCH_NAME == 'main') {
+                    sh 'docker logs "${CONTAINER_NAME}" || true'
+                }
+            }
+        }
+
+        always {
+            echo "Pipeline execution completed."
         }
     }
 }

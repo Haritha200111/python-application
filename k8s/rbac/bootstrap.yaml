@@ -1,0 +1,93 @@
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: python-app
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-deployer
+  namespace: jenkins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployment-manager
+  namespace: python-app
+rules:
+  # Manage application deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+
+  # Inspect rollout history and ReplicaSets
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs:
+      - get
+      - list
+      - watch
+
+  # Inspect application pods
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs:
+      - get
+      - list
+      - watch
+
+  # Manage application service
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+
+  # Create Docker registry secret.
+  # Existing secret access is restricted to dockerhub-registry.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["dockerhub-registry"]
+    verbs: ["get", "update", "patch"]
+
+  # Inspect deployment events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-deployer-binding
+  namespace: python-app
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: jenkins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deployment-manager
