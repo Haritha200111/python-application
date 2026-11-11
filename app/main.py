@@ -11,7 +11,7 @@ app = FastAPI(
 @app.get("/")
 def read_root():
     print("Root endpoint accessed")
-    return {"message": "Hello from the Python API", "status": "running"}
+    return {"message": "Hello from the Python API!", "status": "running"}
 
 
 @app.get("/health")
