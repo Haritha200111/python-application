@@ -25,7 +25,7 @@ pipeline {
 
                 sh '''
                     echo "Branch: ${BRANCH_NAME}"
-                    echo "Commit:"
+                    echo "Commits:"
                     git rev-parse --short HEAD
                 '''
             }
