@@ -180,7 +180,7 @@ pipeline {
 
                         echo "Applying new deployment..."
 
-                        sed "s|__IMAGE__|${DOCKERHUB_REPO}:invalid-test-image|g" \
+                        sed "s|__IMAGE__|${IMAGE}|g" \
                             k8s/deployment/deployment.yaml |
                             kubectl apply -f -
 
