@@ -184,6 +184,16 @@ pipeline {
                             k8s/deployment/deployment.yaml |
                             kubectl apply -f -
 
+                        echo "Reading image configured in Kubernetes..."
+
+                        DEPLOYED_IMAGE=$(
+                            kubectl get deployment "$DEPLOYMENT_NAME" \
+                                -n "$K8S_NAMESPACE" \
+                                -o jsonpath="{.spec.template.spec.containers[?(@.name=='${CONTAINER_NAME}')].image}"
+                        )
+
+                        echo "Image configured in Deployment: $DEPLOYED_IMAGE"
+
                         echo "Waiting for deployment rollout..."
 
                         if kubectl rollout status \
@@ -224,7 +234,7 @@ pipeline {
                                 --sort-by='.lastTimestamp' |
                                 tail -n 40 || true
 
-                            echo "Identifying pods using the new image..."
+                            echo "Identifying pods using the deployed image..."
 
                             NEW_PODS=""
 
@@ -240,7 +250,7 @@ pipeline {
                                         2>/dev/null || true
                                 )
 
-                                if [ "$POD_IMAGE" = "$IMAGE" ]; then
+                                if [ "$POD_IMAGE" = "$DEPLOYED_IMAGE" ]; then
                                     NEW_PODS="$NEW_PODS $POD"
                                 fi
                             done
@@ -275,7 +285,7 @@ pipeline {
                                 done
 
                             else
-                                echo "No pods using the new image were found."
+                                echo "No pods using the deployed image were found."
                             fi
 
                             echo "======================================"
@@ -297,7 +307,23 @@ pipeline {
                                         -n "$K8S_NAMESPACE" \
                                         --timeout=180s
 
-                                    echo "Rollback completed successfully."
+                                    echo "Verifying restored image..."
+
+                                    RESTORED_IMAGE=$(
+                                        kubectl get deployment "$DEPLOYMENT_NAME" \
+                                            -n "$K8S_NAMESPACE" \
+                                            -o jsonpath="{.spec.template.spec.containers[?(@.name=='${CONTAINER_NAME}')].image}"
+                                    )
+
+                                    echo "Previous image: $OLD_IMAGE"
+                                    echo "Restored image: $RESTORED_IMAGE"
+
+                                    if [ "$RESTORED_IMAGE" != "$OLD_IMAGE" ]; then
+                                        echo "ERROR: Rollback image verification failed."
+                                        exit 1
+                                    fi
+
+                                    echo "Rollback completed and verified successfully."
 
                                 else
                                     echo "Rollback command failed."
@@ -336,6 +362,8 @@ pipeline {
                 }
             }
         }
+
+
     }
 
     post {
